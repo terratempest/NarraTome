@@ -4,9 +4,7 @@ An Android client for a user-managed Audiobookshelf server. Browse your library,
 
 ## Install
 
-Download the signed APK from this repository's GitHub Releases page and open it on Android 7.0 or later. Android may ask you to allow installation from your browser or file manager. Future updates are installed manually from Releases; use APKs signed by the same maintainer key to preserve app data.
-
-NarraTome uses application ID `com.narratome`.  
+Download the signed APK from this repository's GitHub Releases page and open it on Android 7.0 or later. Android may ask you to allow installation from your browser or file manager. Future updates are installed manually from Releases.
 
 ## Build
 
