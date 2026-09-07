@@ -30,4 +30,4 @@ Read [SECURITY.md](SECURITY.md) before reporting vulnerabilities. The app includ
 
 ## License
 
-[MIT](LICENSE), copyright NarraTome contributors. Dependency licenses remain with their respective authors. NarraTome is an independent client, not an official Audiobookshelf project.
+[MIT](LICENSE). Dependency licenses remain with their respective authors. NarraTome is an independent client, not an official Audiobookshelf project.
