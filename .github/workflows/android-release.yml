@@ -16,7 +16,6 @@ jobs:
       RELEASE_TAG: ${{ inputs.tag }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      NARRATOME_STORE_FILE: ${{ runner.temp }}/release.jks
       NARRATOME_STORE_PASSWORD: ${{ secrets.NARRATOME_STORE_PASSWORD }}
       NARRATOME_KEY_ALIAS: ${{ secrets.NARRATOME_KEY_ALIAS }}
       NARRATOME_KEY_PASSWORD: ${{ secrets.NARRATOME_KEY_PASSWORD }}
@@ -50,7 +49,8 @@ jobs:
         run: |
           test -n "$SIGNING_KEY_BASE64" || { echo 'Missing signing key secret'; exit 1; }
           umask 077
-          printf '%s' "$SIGNING_KEY_BASE64" | base64 --decode > "$NARRATOME_STORE_FILE"
+          printf '%s' "$SIGNING_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+          printf 'NARRATOME_STORE_FILE=%s/release.jks\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - run: bash ./gradlew assembleRelease -PrequireReleaseSigning=true --no-configuration-cache
       - name: Verify and prepare APK
         run: |
@@ -76,4 +76,4 @@ jobs:
             --verify-tag --draft --title "NarraTome $RELEASE_TAG" --generate-notes
       - name: Remove temporary signing key
         if: always()
-        run: rm -f -- "$NARRATOME_STORE_FILE"
+        run: rm -f -- "$RUNNER_TEMP/release.jks"
