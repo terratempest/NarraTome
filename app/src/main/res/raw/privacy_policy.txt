@@ -1,0 +1,30 @@
+NarraTome privacy policy
+
+NarraTome connects your Android device to an Audiobookshelf server that you choose. The server operator controls that server and its data practices. NarraTome does not provide an audiobook hosting service.
+
+Data used by the app
+The app stores your server addresses, username, session credential, library metadata, artwork, listening progress, bookmarks, playback history, settings, and downloaded audio on your device. Your password is submitted to your chosen server to sign in; the app stores the returned session token rather than your password. Session tokens are encrypted using Android Keystore before local storage.
+
+Server communications
+The app sends authentication requests, library searches, playback/session requests, progress and bookmark updates, and download requests to your configured server. Network requests expose your network address and may include app/device information used by Audiobookshelf playback sessions. Server-provided media addresses may point to other content hosts. App credentials are restricted to configured server endpoints. The server and its proxies may retain their own logs.
+
+Transport and network settings
+HTTP is supported for self-hosted servers and is not encrypted. Other parties on the network may be able to read HTTP traffic, including credentials. Use HTTPS across untrusted networks. The optional Require HTTPS setting blocks HTTP requests, media, and redirects. The app uses network connectivity and, where Android permits access, Wi-Fi network information to select endpoints and apply metered-network preferences.
+
+Storage and background activity
+Downloaded audio and cached artwork support offline use. The app may synchronize and download in the background and show media/download notifications. Android media controllers, including Android Auto, can access library/media metadata and cached cover artwork to provide browsing and playback controls.
+
+Diagnostics and third parties
+The app does not include an advertising or analytics SDK or an app-operated crash-report upload service. Production HTTP request logging is disabled. Local diagnostic messages and Android system diagnostics may still exist. Android processes information under its own policies. GitHub handles repository visits and APK downloads under its own privacy policy. Your server operator and any content hosts have separate privacy practices.
+
+Retention and removal
+Local app data is retained until removed through available app controls or Android app-storage controls. Download controls remove downloaded audio; Settings can clear cached artwork. Clearing Android app storage or uninstalling removes local app data and credentials and can remove unsynchronized progress. These actions do not delete server-side accounts, files, logs, progress, or bookmarks. Contact your server administrator to request deletion of server-held data. NarraTome does not create or manage a separate developer-hosted account.
+
+Backup and device changes
+Credentials, the app database, preferences, downloads, and cached artwork are excluded from Android backup/device transfer. Local offline state and unsynchronized progress therefore may not migrate to a replacement device. Data already synchronized to your server can be retrieved after signing in again.
+
+Contact
+{developer_contact}
+
+Policy updates
+Changes to app behavior may require an updated policy. Review the policy included with the app and the source policy in the NarraTome GitHub repository.

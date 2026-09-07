@@ -1,0 +1,24 @@
+name: Android CI
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Configure SDK
+        run: printf 'sdk.dir=%s\n' "$ANDROID_HOME" > local.properties
+      - run: bash ./gradlew testDebugUnitTest --no-daemon
+      - run: bash ./gradlew assembleDebug --no-daemon
+      - run: bash ./gradlew lintDebug --no-daemon

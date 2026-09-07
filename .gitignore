@@ -1,0 +1,35 @@
+# Local state and generated outputs
+.gradle/
+.kotlin/
+.idea/
+**/build/
+/dist/
+captures/
+.externalNativeBuild/
+.cxx/
+local.properties
+*.iml
+.DS_Store
+Thumbs.db
+AGENTS.md
+
+# Credentials and backups
+.env
+.env.*
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+keystore.properties
+signing.properties
+*.backup
+*.bak
+*.log
+*.hprof
+
+# Distribute APKs through Releases, never source control
+*.apk
+*.aab
+*.apks

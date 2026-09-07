@@ -1,0 +1,79 @@
+name: GitHub APK release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag (for example v1.0)
+        required: true
+        type: string
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: release
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      NARRATOME_STORE_FILE: ${{ runner.temp }}/release.jks
+      NARRATOME_STORE_PASSWORD: ${{ secrets.NARRATOME_STORE_PASSWORD }}
+      NARRATOME_KEY_ALIAS: ${{ secrets.NARRATOME_KEY_ALIAS }}
+      NARRATOME_KEY_PASSWORD: ${{ secrets.NARRATOME_KEY_PASSWORD }}
+      NARRATOME_PRIVACY_POLICY_URL: ${{ vars.NARRATOME_PRIVACY_POLICY_URL }}
+      NARRATOME_DEVELOPER_CONTACT: ${{ vars.NARRATOME_DEVELOPER_CONTACT }}
+    steps:
+      - name: Validate version tag
+        run: '[[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]'
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+      - name: Match app version
+        run: |
+          version=$(sed -n 's/^[[:space:]]*versionName = "\([^"]*\)"/\1/p' app/build.gradle.kts)
+          test "$RELEASE_TAG" = "v$version"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Configure SDK
+        run: printf 'sdk.dir=%s\n' "$ANDROID_HOME" > local.properties
+      - run: bash ./gradlew testDebugUnitTest --no-configuration-cache
+      - run: bash ./gradlew assembleDebug --no-configuration-cache
+      - run: bash ./gradlew lintDebug --no-configuration-cache
+      - name: Load signing key
+        env:
+          SIGNING_KEY_BASE64: ${{ secrets.NARRATOME_SIGNING_KEY_BASE64 }}
+        run: |
+          test -n "$SIGNING_KEY_BASE64" || { echo 'Missing signing key secret'; exit 1; }
+          umask 077
+          printf '%s' "$SIGNING_KEY_BASE64" | base64 --decode > "$NARRATOME_STORE_FILE"
+      - run: bash ./gradlew assembleRelease -PrequireReleaseSigning=true --no-configuration-cache
+      - name: Verify and prepare APK
+        run: |
+          build_tools=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)
+          "$build_tools/apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+          "$build_tools/zipalign" -v -c -P 16 4 app/build/outputs/apk/release/app-release.apk
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk "dist/NarraTome-$RELEASE_TAG.apk"
+          cd dist
+          sha256sum "NarraTome-$RELEASE_TAG.apk" > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: narratome-release-diagnostics
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            app/build/outputs/mapping/release/
+            app/build/reports/tests/
+            app/build/reports/lint-results-debug.*
+      - name: Create draft release
+        run: |
+          gh release create "$RELEASE_TAG" "dist/NarraTome-$RELEASE_TAG.apk" dist/SHA256SUMS.txt \
+            --verify-tag --draft --title "NarraTome $RELEASE_TAG" --generate-notes
+      - name: Remove temporary signing key
+        if: always()
+        run: rm -f -- "$NARRATOME_STORE_FILE"
