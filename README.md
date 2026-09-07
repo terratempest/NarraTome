@@ -26,8 +26,3 @@ On Linux/macOS, use `bash ./gradlew` instead of `.\gradlew`. The debug APK is ge
 
 One Android module (`app`), using Kotlin, Compose, Hilt, Room, Media3, and WorkManager. Packages under `app/src/main/java/com/narratome/` separate presentation, domain, data, playback, synchronization, and dependency wiring. Room schema history and regression tests are included.
 
-Read [SECURITY.md](SECURITY.md) before reporting vulnerabilities. The app includes an offline [privacy policy](app/src/main/res/raw/privacy_policy.txt). HTTP servers are supported; use HTTPS on untrusted networks. Do not attach credentials, personal server details, or private audio to issues.
-
-## License
-
-[MIT](LICENSE). Dependency licenses remain with their respective authors. NarraTome is an independent client, not an official Audiobookshelf project.
