@@ -749,6 +749,7 @@ class AudiobookPlaybackService : MediaLibraryService() {
                                     listOf(
                                         browseCategory(RECENTLY_PLAYED_ID, "Continue"),
                                         browseCategory(RECENTLY_ADDED_ID, "Added"),
+                                        browseCategory(DOWNLOADED_ID, "Downloaded"),
                                         browseCategory(FULL_LIBRARY_ID, "Library"),
                                     ).drop(browsePage.offset).take(browsePage.limit)
                                 }
@@ -799,6 +800,34 @@ class AudiobookPlaybackService : MediaLibraryService() {
                                         libraryId = libraryId,
                                         limit = browsePage.limit,
                                         downloadedOnly = downloadedOnly,
+                                        offset = browsePage.offset,
+                                    ).map { entity ->
+                                        MediaItem.Builder()
+                                            .setMediaId("item:${entity.libraryItemId}")
+                                            .setMediaMetadata(
+                                                baseMetadata(entity.libraryItemId, entity.title, entity.author)
+                                            )
+                                            .build()
+                                    }
+                                }
+
+                                DOWNLOADED_ID -> {
+                                    val libraryId = preferences.selectedLibraryId.first()
+                                        ?: (if (serverReachable) {
+                                            libraryRepository.bookLibraries()
+                                                .getOrNull()
+                                                ?.firstOrNull()
+                                                ?.id
+                                        } else {
+                                            null
+                                        })
+                                        ?: catalogDao.firstLibraryIdOrNull()
+                                        ?: return@runBlocking LibraryResult.ofItemList(ImmutableList.of(), params)
+
+                                    catalogDao.listForLibrary(
+                                        libraryId = libraryId,
+                                        limit = browsePage.limit,
+                                        downloadedOnly = true,
                                         offset = browsePage.offset,
                                     ).map { entity ->
                                         MediaItem.Builder()
@@ -1279,6 +1308,7 @@ class AudiobookPlaybackService : MediaLibraryService() {
         private const val RECENTLY_PLAYED_ID = "recently_played"
         private const val CONTINUE_SERIES_ID = "continue_series"
         private const val RECENTLY_ADDED_ID = "recently_added"
+        private const val DOWNLOADED_ID = "downloaded"
         private const val FULL_LIBRARY_ID = "full_library"
         private const val PLAYBACK_CHANNEL_ID = "playback"
         private const val DEFAULT_SEEK_SKIP_MS = 30_000L
