@@ -207,8 +207,6 @@ class AudiobookPlaybackService : MediaLibraryService() {
                 .build()
 
         val forwardingPlayer = object : androidx.media3.common.ForwardingPlayer(player!!) {
-            private val chapterCommandListeners = java.util.IdentityHashMap<Player.Listener, Player.Listener>()
-
             override fun getPlaybackState(): Int =
                 playbackStateForRetainedPause(
                     playbackState = super.getPlaybackState(),
@@ -272,21 +270,6 @@ class AudiobookPlaybackService : MediaLibraryService() {
                     command == Player.COMMAND_SEEK_TO_PREVIOUS ||
                     command == Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM ||
                     super.isCommandAvailable(command)
-
-            override fun addListener(listener: Player.Listener) {
-                val wrappedListener = chapterCommandListeners.getOrPut(listener) {
-                    object : Player.Listener by listener {
-                        override fun onAvailableCommandsChanged(availableCommands: Player.Commands) {
-                            listener.onAvailableCommandsChanged(availableCommands.withChapterNavigationCommands())
-                        }
-                    }
-                }
-                super.addListener(wrappedListener)
-            }
-
-            override fun removeListener(listener: Player.Listener) {
-                super.removeListener(chapterCommandListeners.remove(listener) ?: listener)
-            }
         }
 
         player?.addListener(object : Player.Listener {
