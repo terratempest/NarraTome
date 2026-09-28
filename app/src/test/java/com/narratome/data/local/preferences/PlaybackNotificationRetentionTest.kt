@@ -18,4 +18,11 @@ class PlaybackNotificationRetentionTest {
         assertThat(normalizePlaybackNotificationRetentionMinutes(5)).isEqualTo(5)
         assertThat(normalizePlaybackNotificationRetentionMinutes(10)).isEqualTo(10)
     }
+
+    @Test
+    fun playbackNotificationRetentionTimeoutMs_convertsEachAllowedValue() {
+        assertThat(playbackNotificationRetentionTimeoutMs(1)).isEqualTo(60_000L)
+        assertThat(playbackNotificationRetentionTimeoutMs(5)).isEqualTo(300_000L)
+        assertThat(playbackNotificationRetentionTimeoutMs(10)).isEqualTo(600_000L)
+    }
 }

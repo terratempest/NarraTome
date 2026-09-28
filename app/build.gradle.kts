@@ -30,8 +30,8 @@ android {
         applicationId = "com.narratome"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 4
+        versionName = "1.0.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         resValue("string", "privacy_policy_url", resourceText(privacyPolicyUrl))
         resValue("string", "developer_contact", resourceText(developerContact))

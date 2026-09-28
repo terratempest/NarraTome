@@ -11,6 +11,8 @@ import com.narratome.data.repository.CatalogSyncRunner
 import com.narratome.data.repository.ItemRepository
 import com.narratome.data.repository.SelectedLibraryRepository
 import com.narratome.data.repository.ServerReachabilityRepository
+import com.narratome.data.repository.ServerSetupValidationException
+import com.narratome.data.repository.ServerSetupValidator
 import com.narratome.domain.model.EndpointMode
 import com.narratome.sync.BackgroundWorkScheduler
 import com.narratome.util.ErrorMapper
@@ -45,6 +47,8 @@ data class ServerUiState(
     val requireHttps: Boolean = false,
     val primaryUrl: String = "",
     val secondaryUrl: String = "",
+    val primaryUrlSchemeInferred: Boolean = false,
+    val secondaryUrlSchemeInferred: Boolean = false,
     val homeSsid: String = "",
     val endpointMode: EndpointMode = EndpointMode.AUTO,
     val username: String = "",
@@ -75,6 +79,7 @@ data class ServerUiState(
 class ServerViewModel @Inject constructor(
     @param:ApplicationContext private val appContext: Context,
     private val authRepository: AuthRepository,
+    private val serverSetupValidator: ServerSetupValidator,
     private val preferences: AppPreferencesRepository,
     private val workScheduler: BackgroundWorkScheduler,
     private val tokenStore: TokenStore,
@@ -90,7 +95,13 @@ class ServerViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             preferences.requireHttps.collect { required ->
-                _ui.update { it.copy(requireHttps = required) }
+                _ui.update {
+                    it.copy(
+                        requireHttps = required,
+                        primaryUrl = applyDefaultScheme(it.primaryUrl, required, it.primaryUrlSchemeInferred),
+                        secondaryUrl = applyDefaultScheme(it.secondaryUrl, required, it.secondaryUrlSchemeInferred),
+                    )
+                }
             }
         }
         viewModelScope.launch {
@@ -106,6 +117,8 @@ class ServerViewModel @Inject constructor(
                     it.copy(
                         primaryUrl = data.primary,
                         secondaryUrl = data.secondary,
+                        primaryUrlSchemeInferred = false,
+                        secondaryUrlSchemeInferred = false,
                         homeSsid = data.ssid,
                         endpointMode = data.mode,
                     )
@@ -170,15 +183,58 @@ class ServerViewModel @Inject constructor(
     )
 
     fun onPrimaryChange(v: String) {
-        _ui.update { it.copy(primaryUrl = v) }
+        _ui.update {
+            it.copy(
+                primaryUrl = v,
+                primaryUrlSchemeInferred = inferredSchemeAfterEdit(
+                    it.primaryUrl,
+                    it.primaryUrlSchemeInferred,
+                    v,
+                ),
+                primaryTestResult = null,
+            )
+        }
+    }
+
+    fun onPrimaryFocusLost() {
+        _ui.update {
+            it.copy(
+                primaryUrl = applyDefaultScheme(it.primaryUrl, it.requireHttps, it.primaryUrlSchemeInferred),
+            )
+        }
     }
 
     fun setRequireHttps(required: Boolean) {
+        _ui.update {
+            it.copy(
+                requireHttps = required,
+                primaryUrl = applyDefaultScheme(it.primaryUrl, required, it.primaryUrlSchemeInferred),
+                secondaryUrl = applyDefaultScheme(it.secondaryUrl, required, it.secondaryUrlSchemeInferred),
+            )
+        }
         viewModelScope.launch { preferences.setRequireHttps(required) }
     }
 
     fun onSecondaryChange(v: String) {
-        _ui.update { it.copy(secondaryUrl = v) }
+        _ui.update {
+            it.copy(
+                secondaryUrl = v,
+                secondaryUrlSchemeInferred = inferredSchemeAfterEdit(
+                    it.secondaryUrl,
+                    it.secondaryUrlSchemeInferred,
+                    v,
+                ),
+                secondaryTestResult = null,
+            )
+        }
+    }
+
+    fun onSecondaryFocusLost() {
+        _ui.update {
+            it.copy(
+                secondaryUrl = applyDefaultScheme(it.secondaryUrl, it.requireHttps, it.secondaryUrlSchemeInferred),
+            )
+        }
     }
 
     fun onSsidChange(v: String) {
@@ -245,6 +301,110 @@ class ServerViewModel @Inject constructor(
                         },
                         onFailure = { e -> ErrorMapper.map(appContext, e) },
                     ),
+                )
+            }
+        }
+    }
+
+    fun validateAndSaveInitialSetup() {
+        val draft = _ui.value
+        viewModelScope.launch {
+            _ui.update { it.copy(busy = true, message = "Checking server configuration...") }
+
+            val primary = try {
+                normalizeServerEndpoint(
+                    draft.primaryUrl,
+                    draft.requireHttps,
+                    draft.primaryUrlSchemeInferred,
+                    "primary",
+                )
+            } catch (error: IllegalArgumentException) {
+                _ui.update { it.copy(busy = false, message = error.message ?: "Enter a valid primary server URL.") }
+                return@launch
+            }
+            val backup = try {
+                draft.secondaryUrl.trim().takeIf(String::isNotBlank)?.let {
+                    normalizeServerEndpoint(
+                        it,
+                        draft.requireHttps,
+                        draft.secondaryUrlSchemeInferred,
+                        "backup",
+                    )
+                }
+            } catch (error: IllegalArgumentException) {
+                _ui.update { it.copy(busy = false, message = error.message ?: "Enter a valid backup server URL.") }
+                return@launch
+            }
+            _ui.update {
+                it.copy(
+                    primaryUrl = primary.value,
+                    secondaryUrl = backup?.value.orEmpty(),
+                )
+            }
+
+            val existingToken = if (draft.password == MASKED_PASSWORD) tokenStore.getToken() else null
+            val session = try {
+                serverSetupValidator.validate(
+                    primary = primary.url,
+                    backup = backup?.url,
+                    username = draft.username,
+                    password = draft.password.takeUnless { it == MASKED_PASSWORD }.orEmpty(),
+                    existingToken = existingToken,
+                    requireHttps = draft.requireHttps,
+                )
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: ServerSetupValidationException) {
+                _ui.update { it.copy(busy = false, message = error.message) }
+                return@launch
+            } catch (_: Exception) {
+                _ui.update {
+                    it.copy(
+                        busy = false,
+                        message = "Server setup could not be verified. Check the address and credentials, then try again.",
+                    )
+                }
+                return@launch
+            }
+
+            try {
+                // Store a verified session first. If saving preferences fails, setup remains active.
+                tokenStore.setSession(session.username, session.token)
+                preferences.setServerConfig(
+                    primaryUrl = primary.value,
+                    secondaryUrl = backup?.value.orEmpty(),
+                    homeSsid = draft.homeSsid,
+                    endpointMode = draft.endpointMode,
+                )
+            } catch (_: Exception) {
+                _ui.update {
+                    it.copy(
+                        busy = false,
+                        message = "The server was verified, but setup could not be saved. Please try again.",
+                    )
+                }
+                return@launch
+            }
+
+            val syncMessage = try {
+                workScheduler.schedulePeriodicMaintenance()
+                workScheduler.enqueueImmediatePullAndBookmarks()
+                workScheduler.enqueueSyncWork()
+                reachabilityRepository.refresh()
+                "Server verified, saved, and sync started."
+            } catch (_: Exception) {
+                "Server verified and saved. Sync could not be started; try Sync now in Server settings."
+            }
+            _ui.update {
+                it.copy(
+                    busy = false,
+                    primaryUrl = primary.value,
+                    secondaryUrl = backup?.value.orEmpty(),
+                    primaryUrlSchemeInferred = false,
+                    secondaryUrlSchemeInferred = false,
+                    username = session.username,
+                    password = MASKED_PASSWORD,
+                    message = syncMessage,
                 )
             }
         }
@@ -384,3 +544,5 @@ class ServerViewModel @Inject constructor(
             lastSyncError = state?.lastSyncError,
         )
 }
+
+private const val MASKED_PASSWORD = "*****"

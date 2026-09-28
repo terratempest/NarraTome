@@ -20,6 +20,7 @@ import okhttp3.RequestBody
 import okhttp3.ResponseBody
 import retrofit2.Response
 import retrofit2.http.Body
+import retrofit2.http.Header
 import retrofit2.http.GET
 import retrofit2.http.DELETE
 import retrofit2.http.PATCH
@@ -40,7 +41,7 @@ interface AudiobookshelfApi {
     suspend fun login(@Body body: LoginRequest): LoginResponseDto
 
     @POST("api/authorize")
-    suspend fun authorize(): LoginResponseDto
+    suspend fun authorize(@Header("Authorization") authorization: String? = null): LoginResponseDto
 
     @GET("api/me")
     suspend fun me(): MeDto

@@ -2,6 +2,7 @@ package com.narratome.player
 
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import com.narratome.domain.model.BookChapter
 
 internal data class BookPlaybackPart(
     val mediaItem: MediaItem,
@@ -15,6 +16,7 @@ internal data class BookPlaybackRecipe(
     /** Expanded library duration; preferred over temporary source placeholder values. */
     val canonicalDurationMs: Long?,
     val hasPlaceholderDurations: Boolean,
+    val chapters: List<BookChapter> = emptyList(),
 )
 
 internal fun placeholderDurationsMs(

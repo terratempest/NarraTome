@@ -48,6 +48,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -139,7 +140,7 @@ private fun ServerSetupScreen(
         }
 
         ServerConfigFields(ui = ui, viewModel = viewModel, showAdvanced = false)
-        SaveButton(ui = ui, onClick = viewModel::saveAndSync)
+        SaveButton(ui = ui, onClick = viewModel::validateAndSaveInitialSetup)
         ServerMessage(ui.message)
         Spacer(Modifier.height(40.dp))
     }
@@ -179,6 +180,7 @@ private fun ServerDashboardScreen(
                     onValueChange = viewModel::onPrimaryChange,
                     label = "Primary server URL",
                     placeholder = "http://192.168.1.10:13378",
+                    onFocusLost = viewModel::onPrimaryFocusLost,
                 )
                 EndpointTestRow(
                     label = "Primary",
@@ -192,6 +194,7 @@ private fun ServerDashboardScreen(
                     onValueChange = viewModel::onSecondaryChange,
                     label = "Backup server URL",
                     placeholder = "Same library on another host or tailnet URL",
+                    onFocusLost = viewModel::onSecondaryFocusLost,
                 )
                 EndpointTestRow(
                     label = "Backup",
@@ -396,12 +399,14 @@ private fun ServerConfigFields(
             onValueChange = viewModel::onPrimaryChange,
             label = "Primary server URL",
             placeholder = "http://192.168.1.10:13378",
+            onFocusLost = viewModel::onPrimaryFocusLost,
         )
         ServerTextField(
             value = ui.secondaryUrl,
             onValueChange = viewModel::onSecondaryChange,
             label = "Backup server URL (optional)",
             placeholder = "Same library on another host or tailnet URL",
+            onFocusLost = viewModel::onSecondaryFocusLost,
         )
         ServerTextField(
             value = ui.username,
@@ -577,7 +582,9 @@ fun ServerTextField(
     label: String,
     placeholder: String = "",
     isPassword: Boolean = false,
+    onFocusLost: (() -> Unit)? = null,
 ) {
+    var wasFocused by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
             text = label.uppercase(),
@@ -590,7 +597,12 @@ fun ServerTextField(
             value = value,
             onValueChange = onValueChange,
             placeholder = { Text(placeholder, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)) },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .onFocusChanged { focusState ->
+                    if (wasFocused && !focusState.isFocused) onFocusLost?.invoke()
+                    wasFocused = focusState.isFocused
+                }
+                .fillMaxWidth(),
             singleLine = true,
             shape = RoundedCornerShape(8.dp),
             visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
@@ -650,7 +662,8 @@ private fun StatusLine(text: String, success: Boolean) {
 @Composable
 private fun ServerMessage(message: String?) {
     message?.let {
-        val isError = it.contains("failed", true) || it.contains("error", true)
+        val isError = listOf("failed", "error", "could not", "not accepted", "enter a valid", "enter your")
+            .any { marker -> it.contains(marker, ignoreCase = true) }
         Text(
             text = it,
             style = MaterialTheme.typography.bodySmall,

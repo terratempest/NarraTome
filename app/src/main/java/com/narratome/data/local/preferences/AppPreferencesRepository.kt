@@ -43,6 +43,9 @@ fun normalizePlaybackNotificationRetentionMinutes(value: Int?): Int =
         DEFAULT_PLAYBACK_NOTIFICATION_RETENTION_MINUTES
     }
 
+fun playbackNotificationRetentionTimeoutMs(value: Int?): Long =
+    normalizePlaybackNotificationRetentionMinutes(value) * 60_000L
+
 @Singleton
 class AppPreferencesRepository @Inject constructor(
     @param:ApplicationContext private val context: Context,

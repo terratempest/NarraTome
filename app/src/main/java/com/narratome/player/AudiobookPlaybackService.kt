@@ -27,12 +27,14 @@ import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaLibraryService.MediaLibrarySession
-import androidx.media3.session.MediaSession
 import androidx.media3.session.CommandButton
+import androidx.media3.session.MediaSession
+import com.narratome.BuildConfig
 import com.narratome.MainActivity
 import com.narratome.data.local.db.CatalogDao
 import com.narratome.data.local.preferences.AppPreferencesRepository
 import com.narratome.data.local.preferences.DEFAULT_PLAYBACK_NOTIFICATION_RETENTION_MINUTES
+import com.narratome.data.local.preferences.playbackNotificationRetentionTimeoutMs
 import com.narratome.data.repository.ItemRepository
 import com.narratome.data.repository.LibraryRepository
 import com.narratome.data.repository.ProgressRepository
@@ -89,6 +91,8 @@ class AudiobookPlaybackService : MediaLibraryService() {
     private val bookPlaybackRecipes = ConcurrentHashMap<String, BookPlaybackRecipe>()
     private val searchResults = ConcurrentHashMap<MediaSession.ControllerInfo, Pair<String, List<MediaItem>>>()
     private var mediaLibrarySession: MediaLibrarySession? = null
+    private var retainPausedSessionAfterNetworkStop = false
+    private var stoppingRemotePlayback = false
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val timelineWindow = androidx.media3.common.Timeline.Window()
@@ -203,9 +207,25 @@ class AudiobookPlaybackService : MediaLibraryService() {
                 .build()
 
         val forwardingPlayer = object : androidx.media3.common.ForwardingPlayer(player!!) {
+            private val chapterCommandListeners = java.util.IdentityHashMap<Player.Listener, Player.Listener>()
+
+            override fun getPlaybackState(): Int =
+                playbackStateForRetainedPause(
+                    playbackState = super.getPlaybackState(),
+                    hasCurrentMediaItem = currentMediaItem != null,
+                    playWhenReady = playWhenReady,
+                    retainedPausedSession = retainPausedSessionAfterNetworkStop,
+                )
+
             override fun prepare() {
+                retainPausedSessionAfterNetworkStop = false
                 updatePlaybackAction()
                 if (!httpsBlocked() && (!remotePlayback() || networkPolicy.allowed(playbackAction))) super.prepare()
+            }
+
+            override fun stop() {
+                retainPausedSessionAfterNetworkStop = false
+                super.stop()
             }
 
             override fun play() = requestPlay()
@@ -217,7 +237,6 @@ class AudiobookPlaybackService : MediaLibraryService() {
             override fun pause() {
                 networkPolicy.revoke(playbackAction)
                 super.pause()
-                if (remotePlayback() && !networkPolicy.state.value.unrestricted) stopRemoteLoading()
             }
 
             override fun seekBack() {
@@ -235,18 +254,62 @@ class AudiobookPlaybackService : MediaLibraryService() {
                     }
                 )
             }
+
+            override fun seekToNext() = seekToNextChapterOrMediaItem()
+
+            override fun seekToNextMediaItem() = seekToNextChapterOrMediaItem()
+
+            override fun seekToPrevious() = seekToPreviousChapterOrMediaItem()
+
+            override fun seekToPreviousMediaItem() = seekToPreviousChapterOrMediaItem()
+
+            override fun getAvailableCommands(): Player.Commands =
+                super.getAvailableCommands().withChapterNavigationCommands()
+
+            override fun isCommandAvailable(command: Int): Boolean =
+                command == Player.COMMAND_SEEK_TO_NEXT ||
+                    command == Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM ||
+                    command == Player.COMMAND_SEEK_TO_PREVIOUS ||
+                    command == Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM ||
+                    super.isCommandAvailable(command)
+
+            override fun addListener(listener: Player.Listener) {
+                val wrappedListener = chapterCommandListeners.getOrPut(listener) {
+                    object : Player.Listener by listener {
+                        override fun onAvailableCommandsChanged(availableCommands: Player.Commands) {
+                            listener.onAvailableCommandsChanged(availableCommands.withChapterNavigationCommands())
+                        }
+                    }
+                }
+                super.addListener(wrappedListener)
+            }
+
+            override fun removeListener(listener: Player.Listener) {
+                super.removeListener(chapterCommandListeners.remove(listener) ?: listener)
+            }
         }
 
         player?.addListener(object : Player.Listener {
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                logPlaybackDiagnostic("playWhenReady=$playWhenReady reason=$reason")
                 if (!playWhenReady) {
                     networkPolicy.revoke(playbackAction)
-                    if (remotePlayback() && !networkPolicy.state.value.unrestricted) stopRemoteLoading()
+                    if (!stoppingRemotePlayback && remotePlayback() && !networkPolicy.state.value.unrestricted) {
+                        stopRemoteLoading()
+                    }
                 } else if (remotePlayback() && !networkPolicy.allowed(playbackAction)) {
                     stopRemoteLoading()
                     requestPlay()
                 }
             }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                logPlaybackDiagnostic(
+                    "playerState=$playbackState exposedState=${mediaLibrarySession?.player?.playbackState} " +
+                        "playWhenReady=${player?.playWhenReady} item=${player?.currentMediaItem != null}",
+                )
+            }
+
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 if (isPlaying) {
                     mainHandler.post(updateProgressRunnable)
@@ -257,6 +320,7 @@ class AudiobookPlaybackService : MediaLibraryService() {
             }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                retainPausedSessionAfterNetworkStop = false
                 updatePlaybackAction()
                 if (remotePlayback() && !networkPolicy.allowed(playbackAction)) {
                     val wantedPlay = player?.playWhenReady == true
@@ -266,6 +330,10 @@ class AudiobookPlaybackService : MediaLibraryService() {
                 mediaItem?.let {
                     saveLastPlayedPosition()
                 }
+            }
+
+            override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
+                if (timeline.isEmpty) retainPausedSessionAfterNetworkStop = false
             }
 
             override fun onPositionDiscontinuity(
@@ -301,10 +369,12 @@ class AudiobookPlaybackService : MediaLibraryService() {
         setMediaNotificationProvider(
             DefaultMediaNotificationProvider.Builder(this)
                 .setChannelId(PLAYBACK_CHANNEL_ID)
-                .setNotificationId(7102)
+                .setNotificationId(PLAYBACK_NOTIFICATION_ID)
                 .build()
         )
-        setForegroundServiceTimeoutMs(DEFAULT_PLAYBACK_NOTIFICATION_RETENTION_MINUTES * 60_000L)
+        setForegroundServiceTimeoutMs(
+            playbackNotificationRetentionTimeoutMs(DEFAULT_PLAYBACK_NOTIFICATION_RETENTION_MINUTES),
+        )
 
         serviceScope.launch {
             networkPolicy.state.collect {
@@ -351,7 +421,9 @@ class AudiobookPlaybackService : MediaLibraryService() {
             preferences.playbackNotificationRetentionMinutes
                 .distinctUntilChanged()
                 .collect { minutes ->
-                    setForegroundServiceTimeoutMs(minutes * 60_000L)
+                    val timeoutMs = playbackNotificationRetentionTimeoutMs(minutes)
+                    setForegroundServiceTimeoutMs(timeoutMs)
+                    logPlaybackDiagnostic("notificationRetentionMs=$timeoutMs")
                 }
         }
     }
@@ -364,6 +436,35 @@ class AudiobookPlaybackService : MediaLibraryService() {
         }
     }
 
+    private fun isAndroidAutoController(
+        session: MediaSession,
+        controller: MediaSession.ControllerInfo,
+    ): Boolean = session.isAutoCompanionController(controller) || session.isAutomotiveController(controller)
+
+    private fun seekToNextChapterOrMediaItem() {
+        val current = player ?: return
+        val item = current.currentMediaItem ?: return
+        val chapters = bookPlaybackRecipes[item.mediaId]?.chapters.orEmpty()
+        val targetPositionMs = nextChapterSeekPositionMs(chapters, current.currentPosition.coerceAtLeast(0L))
+        if (targetPositionMs == null) {
+            current.seekToNextMediaItem()
+        } else {
+            current.seekTo(targetPositionMs)
+        }
+    }
+
+    private fun seekToPreviousChapterOrMediaItem() {
+        val current = player ?: return
+        val item = current.currentMediaItem ?: return
+        val chapters = bookPlaybackRecipes[item.mediaId]?.chapters.orEmpty()
+        val targetPositionMs = previousChapterSeekPositionMs(chapters, current.currentPosition.coerceAtLeast(0L))
+        if (targetPositionMs == null) {
+            current.seekToPreviousMediaItem()
+        } else {
+            current.seekTo(targetPositionMs)
+        }
+    }
+
     private fun remotePlayback(): Boolean {
         val item = player?.currentMediaItem ?: return false
         val parts = bookPlaybackRecipes[item.mediaId]?.parts?.map { it.mediaItem } ?: listOf(item)
@@ -372,12 +473,19 @@ class AudiobookPlaybackService : MediaLibraryService() {
 
     private fun stopRemoteLoading() {
         val current = player ?: return
+        retainPausedSessionAfterNetworkStop = current.currentMediaItem != null
+        if (current.playbackState == Player.STATE_IDLE) return
         val index = current.currentMediaItemIndex
         val position = current.currentPosition
-        current.pause()
-        if (current.playbackState != Player.STATE_IDLE) {
-            current.stop()
-            if (index >= 0) current.seekTo(index, position)
+        stoppingRemotePlayback = true
+        try {
+            current.pause()
+            if (current.playbackState != Player.STATE_IDLE) {
+                current.stop()
+                if (index >= 0) current.seekTo(index, position)
+            }
+        } finally {
+            stoppingRemotePlayback = false
         }
     }
 
@@ -403,8 +511,9 @@ class AudiobookPlaybackService : MediaLibraryService() {
         val play = {
             if (playbackAction == key && player === current) {
                 if (current.playbackState == Player.STATE_IDLE || current.playerError != null) current.prepare()
+                retainPausedSessionAfterNetworkStop = false
                 current.play()
-                getSystemService(NotificationManager::class.java).cancel(7103)
+                getSystemService(NotificationManager::class.java).cancel(METERED_NOTICE_NOTIFICATION_ID)
             }
         }
         if (!remotePlayback() || networkPolicy.allowed(key)) {
@@ -426,7 +535,7 @@ class AudiobookPlaybackService : MediaLibraryService() {
             .setContentTitle("Playback paused")
             .setContentText(message)
             .setContentIntent(open).setAutoCancel(true).build()
-        getSystemService(NotificationManager::class.java).notify(7103, notification)
+        getSystemService(NotificationManager::class.java).notify(METERED_NOTICE_NOTIFICATION_ID, notification)
     }
 
     private val libraryCallback =
@@ -468,13 +577,29 @@ class AudiobookPlaybackService : MediaLibraryService() {
                         true
                     }
 
-                    KeyEvent.KEYCODE_MEDIA_NEXT,
+                    KeyEvent.KEYCODE_MEDIA_NEXT -> {
+                        if (isAndroidAutoController(session, controllerInfo)) {
+                            sessionPlayer.seekToNextMediaItem()
+                        } else {
+                            sessionPlayer.seekForward()
+                        }
+                        true
+                    }
+
                     KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
                         sessionPlayer.seekForward()
                         true
                     }
 
-                    KeyEvent.KEYCODE_MEDIA_PREVIOUS,
+                    KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+                        if (isAndroidAutoController(session, controllerInfo)) {
+                            sessionPlayer.seekToPreviousMediaItem()
+                        } else {
+                            sessionPlayer.seekBack()
+                        }
+                        true
+                    }
+
                     KeyEvent.KEYCODE_MEDIA_REWIND -> {
                         sessionPlayer.seekBack()
                         true
@@ -513,19 +638,13 @@ class AudiobookPlaybackService : MediaLibraryService() {
                         .setAvailablePlayerCommands(playerCommands)
                         .setMediaButtonPreferences(buttonPreferences)
                         .build()
-                } else if (
-                    session.isAutoCompanionController(controller) ||
-                    session.isAutomotiveController(controller)
-                ) {
+                } else if (isAndroidAutoController(session, controller)) {
                     trackMediaButtonPreferenceController(controller)
 
                     val playerCommands =
                         MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS
+                            .withChapterNavigationCommands()
                             .buildUpon()
-                            .remove(Player.COMMAND_SEEK_TO_NEXT)
-                            .remove(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
-                            .remove(Player.COMMAND_SEEK_TO_PREVIOUS)
-                            .remove(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
                             .add(Player.COMMAND_SEEK_BACK)
                             .add(Player.COMMAND_SEEK_FORWARD)
                             .build()
@@ -964,7 +1083,8 @@ class AudiobookPlaybackService : MediaLibraryService() {
                 .setMediaId("item:$rawId")
                 .setMediaMetadata(baseMetadata(rawId, title, author))
                 .build()
-            val fallbackDurationMs = itemRepository.getCachedBookDetailOrNull(rawId)
+            val cachedBookDetail = itemRepository.getCachedBookDetailOrNull(rawId)
+            val fallbackDurationMs = cachedBookDetail
                 ?.durationSec
                 ?.let { (it * 1000).toLong() }
                 ?.takeIf { it > 0L }
@@ -984,6 +1104,7 @@ class AudiobookPlaybackService : MediaLibraryService() {
                 parts = parts,
                 canonicalDurationMs = fallbackDurationMs.takeIf { it > 0L },
                 hasPlaceholderDurations = trackDurationsMs.any { it == C.TIME_UNSET },
+                chapters = cachedBookDetail?.chapters.orEmpty(),
             )
             listOf(
                 ResolvedMediaItem(
@@ -1000,9 +1121,24 @@ class AudiobookPlaybackService : MediaLibraryService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? =
         mediaLibrarySession
 
+    override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
+        logPlaybackSnapshot(
+            "notificationUpdate startInForegroundRequired=$startInForegroundRequired " +
+                "state=${session.player.playbackState} playWhenReady=${session.player.playWhenReady} " +
+                "items=${session.player.mediaItemCount}",
+        )
+        super.onUpdateNotification(session, startInForegroundRequired)
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        logPlaybackSnapshot("taskRemoved")
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
+        logPlaybackSnapshot("serviceDestroy")
         networkPolicy.revoke(playbackAction)
-        getSystemService(NotificationManager::class.java).cancel(7103)
+        getSystemService(NotificationManager::class.java).cancel(METERED_NOTICE_NOTIFICATION_ID)
         mainHandler.removeCallbacks(updateProgressRunnable)
         serviceScope.cancel()
         browseExecutor.shutdown()
@@ -1013,6 +1149,28 @@ class AudiobookPlaybackService : MediaLibraryService() {
         player = null
         mediaLibrarySession = null
         super.onDestroy()
+    }
+
+    private fun logPlaybackDiagnostic(message: String) {
+        if (!BuildConfig.DEBUG) return
+        android.util.Log.d(PLAYBACK_DIAGNOSTICS_TAG, message)
+    }
+
+    private fun logPlaybackSnapshot(event: String) {
+        if (!BuildConfig.DEBUG) return
+        val notificationActive = runCatching {
+            getSystemService(NotificationManager::class.java)
+                .activeNotifications
+                .any { it.id == PLAYBACK_NOTIFICATION_ID }
+        }.getOrDefault(false)
+        val foreground = runCatching { isPlaybackOngoing() }.getOrDefault(false)
+        val current = player
+        logPlaybackDiagnostic(
+            "$event foreground=$foreground notificationActive=$notificationActive " +
+                "playerState=${current?.playbackState} playWhenReady=${current?.playWhenReady} " +
+                "hasItem=${current?.currentMediaItem != null} " +
+                "sessionState=${mediaLibrarySession?.player?.playbackState}",
+        )
     }
 
     private fun refreshPlayerArtworkMetadata() {
@@ -1114,6 +1272,9 @@ class AudiobookPlaybackService : MediaLibraryService() {
     private fun Long.secondsFromMillis(): Int = (this / 1000L).toInt()
 
     companion object {
+        private const val PLAYBACK_DIAGNOSTICS_TAG = "NarraTomePlayback"
+        private const val PLAYBACK_NOTIFICATION_ID = 7102
+        private const val METERED_NOTICE_NOTIFICATION_ID = 7103
         private const val ROOT_ID = "audiobook_root"
         private const val RECENTLY_PLAYED_ID = "recently_played"
         private const val CONTINUE_SERIES_ID = "continue_series"

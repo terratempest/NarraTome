@@ -507,13 +507,10 @@ class PlaybackConnector @Inject constructor(
 
     suspend fun nextChapter(progressRepository: ProgressRepository? = null) {
         val chapters = _playerState.value.chapters
-        if (chapters.isNotEmpty()) {
-            val currentPosSec = _playerState.value.positionMs / 1000.0
-            val nextChapter = chapters.sortedBy { it.startSec }.firstOrNull { it.startSec > currentPosSec + 1.0 }
-            if (nextChapter != null) {
-                seekTo((nextChapter.startSec * 1000).toLong(), progressRepository)
-                return
-            }
+        val nextPositionMs = nextChapterSeekPositionMs(chapters, _playerState.value.positionMs)
+        if (nextPositionMs != null) {
+            seekTo(nextPositionMs, progressRepository)
+            return
         }
         controller?.seekToNextMediaItem()
         if (progressRepository != null) persistProgressIfPlaying(progressRepository)
@@ -521,21 +518,10 @@ class PlaybackConnector @Inject constructor(
 
     suspend fun previousChapter(progressRepository: ProgressRepository? = null) {
         val chapters = _playerState.value.chapters
-        if (chapters.isNotEmpty()) {
-            val currentPosSec = _playerState.value.positionMs / 1000.0
-            val sorted = chapters.sortedBy { it.startSec }
-            val currentChapter = sorted.lastOrNull { it.startSec <= currentPosSec + 0.1 }
-            if (currentChapter != null) {
-                val index = sorted.indexOf(currentChapter)
-                if (currentPosSec - currentChapter.startSec > 3.0) {
-                    seekTo((currentChapter.startSec * 1000).toLong(), progressRepository)
-                } else if (index > 0) {
-                    seekTo((sorted[index - 1].startSec * 1000).toLong(), progressRepository)
-                } else {
-                    seekTo(0, progressRepository)
-                }
-                return
-            }
+        val previousPositionMs = previousChapterSeekPositionMs(chapters, _playerState.value.positionMs)
+        if (previousPositionMs != null) {
+            seekTo(previousPositionMs, progressRepository)
+            return
         }
         controller?.seekToPreviousMediaItem()
         if (progressRepository != null) persistProgressIfPlaying(progressRepository)
