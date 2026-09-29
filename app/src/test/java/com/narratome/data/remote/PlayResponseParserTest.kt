@@ -61,6 +61,17 @@ class PlayResponseParserTest {
     }
 
     @Test
+    fun extractTrackDownloadInfos_readsDurationFromTrackMetadata() {
+        val json = Json.parseToJsonElement(
+            """{"audioTracks":[{"contentUrl":"/a/1.mp3","duration":61.5}]}""",
+        )
+
+        val info = PlayResponseParser.extractTrackDownloadInfos(json, "https://srv").single()
+
+        assertEquals(61.5, info.durationSec!!, 0.001)
+    }
+
+    @Test
     fun extractAllPlayableUrls_playItemDto_decodesSameAsJson() {
         val raw = """
             {"audioTracks":[

@@ -18,4 +18,5 @@ data class LocalDownloadPartEntity(
     val partIndex: Int,
     val fileName: String,
     val createdAtEpochMs: Long,
+    val durationSec: Double? = null,
 )

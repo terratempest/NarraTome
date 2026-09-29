@@ -161,6 +161,9 @@ class DownloadRepository @Inject constructor(
             }
             completedPartIndices.forEach { index ->
                 if (index in tracks.indices) {
+                    tracks[index].durationSec?.let {
+                        localDownloadDao.updatePartDuration(downloadKey, index, it)
+                    }
                     val fileName = diskNameForPart(index, tracks[index].url)
                     val existingFile = File(itemDir, fileName)
                     partDownloaded[index] = if (existingFile.isFile) existingFile.length() else 0L
@@ -259,6 +262,7 @@ class DownloadRepository @Inject constructor(
                                         partIndex = index,
                                         fileName = fileName,
                                         createdAtEpochMs = now,
+                                        durationSec = track.durationSec,
                                     ),
                                 )
                                 persistRunningProgress(index, outFile.length(), track.expectedBytes ?: outFile.length())

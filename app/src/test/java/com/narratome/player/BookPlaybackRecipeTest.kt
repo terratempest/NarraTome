@@ -11,10 +11,9 @@ class BookPlaybackRecipeTest {
     fun placeholderDurationsMs_preservesKnownPartDurations() {
         val durations = placeholderDurationsMs(
             trackDurationsMs = listOf(60_000L, C.TIME_UNSET, 90_000L),
-            bookDurationMs = 210_000L,
         )
 
-        assertThat(durations).isEqualTo(listOf(60_000L, 60_000L, 90_000L))
+        assertThat(durations).isEqualTo(listOf(60_000L, 1L, 90_000L))
     }
 
     @Test

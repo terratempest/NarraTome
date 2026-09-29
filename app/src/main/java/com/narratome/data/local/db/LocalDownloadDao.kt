@@ -24,6 +24,9 @@ interface LocalDownloadDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertPart(entity: LocalDownloadPartEntity)
 
+    @Query("UPDATE local_download_parts SET durationSec = :durationSec WHERE downloadKey = :downloadKey AND partIndex = :partIndex")
+    suspend fun updatePartDuration(downloadKey: String, partIndex: Int, durationSec: Double)
+
     @Query("SELECT * FROM local_download_parts WHERE downloadKey = :downloadKey ORDER BY partIndex ASC")
     suspend fun listParts(downloadKey: String): List<LocalDownloadPartEntity>
 

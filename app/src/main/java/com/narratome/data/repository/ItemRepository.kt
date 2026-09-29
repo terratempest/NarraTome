@@ -1,6 +1,7 @@
 package com.narratome.data.repository
 
 import android.content.Context
+import android.media.MediaMetadataRetriever
 import androidx.paging.PagingSource
 import androidx.sqlite.db.SimpleSQLiteQuery
 import com.narratome.data.local.db.CatalogDao
@@ -32,6 +33,9 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+
+internal fun hasKnownTrackDurations(tracks: List<PlayableTrack>): Boolean =
+    tracks.isNotEmpty() && tracks.all { it.durationSec?.let { duration -> duration > 0.0 } == true }
 
 fun CatalogItemEntity.toLibraryItemSummary(): LibraryItemSummary =
     LibraryItemSummary(
@@ -332,10 +336,27 @@ class ItemRepository @Inject constructor(
         for (p in parts) {
             val f = File(dir, p.fileName)
             if (!f.isFile || f.length() == 0L) return null
-            out.add(PlayableTrack(f.toURI().toString(), null))
+            val durationSec = p.durationSec ?: probeDurationSec(f)?.also {
+                localDownloadDao.updatePartDuration(downloadKey, p.partIndex, it)
+            }
+            out.add(PlayableTrack(f.toURI().toString(), durationSec))
         }
-        return out
+        return out.takeIf(::hasKnownTrackDurations)
     }
+
+    private fun probeDurationSec(file: File): Double? =
+        runCatching {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(file.absolutePath)
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                    ?.toLongOrNull()
+                    ?.takeIf { it > 0L }
+                    ?.div(1000.0)
+            } finally {
+                retriever.release()
+            }
+        }.getOrNull()
 
     private fun itemDownloadDir(libraryItemId: String, episodeId: String?): File {
         val root = File(appContext.filesDir, "downloads")

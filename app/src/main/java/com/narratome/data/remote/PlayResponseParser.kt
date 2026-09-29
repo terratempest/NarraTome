@@ -15,6 +15,7 @@ object PlayResponseParser {
         val url: String,
         val expectedBytes: Long?,
         val sha256: String?,
+        val durationSec: Double? = null,
     )
 
     private data class PlayTracks(val sessionId: String?, val tracks: JsonArray)
@@ -81,7 +82,9 @@ object PlayResponseParser {
                 ?: o["metadata"]?.jsonObject?.get("size")?.jsonPrimitive?.content?.toLongOrNull()
             val hash = o["sha256"]?.jsonPrimitive?.content
                 ?: o["metadata"]?.jsonObject?.get("hash")?.jsonPrimitive?.content
-            out.add(TrackDownloadInfo(url = url, expectedBytes = size, sha256 = hash))
+            val duration = o["duration"]?.jsonPrimitive?.content?.toDoubleOrNull()
+                ?: o["metadata"]?.jsonObject?.get("duration")?.jsonPrimitive?.content?.toDoubleOrNull()
+            out.add(TrackDownloadInfo(url = url, expectedBytes = size, sha256 = hash, durationSec = duration?.takeIf { it > 0.0 }))
         }
         return out
     }

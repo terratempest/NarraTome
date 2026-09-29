@@ -1138,15 +1138,13 @@ class AudiobookPlaybackService : MediaLibraryService() {
                 .setMediaMetadata(baseMetadata(rawId, title, author))
                 .build()
             val cachedBookDetail = itemRepository.getCachedBookDetailOrNull(rawId)
-            val fallbackDurationMs = cachedBookDetail
-                ?.durationSec
-                ?.let { (it * 1000).toLong() }
-                ?.takeIf { it > 0L }
-                ?: 0L
             val trackDurationsMs = tracks.map { track ->
                 track.durationSec?.let { (it * 1000).toLong() } ?: C.TIME_UNSET
             }
-            val placeholderDurations = placeholderDurationsMs(trackDurationsMs, fallbackDurationMs)
+            val placeholderDurations = placeholderDurationsMs(trackDurationsMs)
+            val exactBookDurationMs = trackDurationsMs
+                .takeIf { it.isNotEmpty() && it.all { duration -> duration != C.TIME_UNSET && duration > 0L } }
+                ?.sum()
             val parts = tracks.mapIndexed { index, track ->
                 BookPlaybackPart(
                     mediaItem = MediaItem.Builder().setUri(track.url.toUri()).build(),
@@ -1156,7 +1154,7 @@ class AudiobookPlaybackService : MediaLibraryService() {
             bookPlaybackRecipes[bookMediaItem.mediaId] = BookPlaybackRecipe(
                 mediaItem = bookMediaItem,
                 parts = parts,
-                canonicalDurationMs = fallbackDurationMs.takeIf { it > 0L },
+                canonicalDurationMs = exactBookDurationMs,
                 hasPlaceholderDurations = trackDurationsMs.any { it == C.TIME_UNSET },
                 chapters = cachedBookDetail?.chapters.orEmpty(),
             )

@@ -16,7 +16,7 @@ import androidx.room.RoomDatabase
         LibraryBrowseListCacheEntity::class,
         PlaybackHistoryEntity::class,
     ],
-    version = 20,
+    version = 21,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {

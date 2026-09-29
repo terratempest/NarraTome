@@ -21,18 +21,8 @@ internal data class BookPlaybackRecipe(
 
 internal fun placeholderDurationsMs(
     trackDurationsMs: List<Long>,
-    bookDurationMs: Long,
 ): List<Long> {
-    val knownDurationMs = trackDurationsMs.filter { it != C.TIME_UNSET }.sum()
-    val unknownCount = trackDurationsMs.count { it == C.TIME_UNSET }
-    val fallbackPerPartMs = if (unknownCount == 0) {
-        0L
-    } else {
-        ((bookDurationMs - knownDurationMs).coerceAtLeast(unknownCount.toLong()) / unknownCount)
-            .coerceAtLeast(1L)
-    }
-
     return trackDurationsMs.map { durationMs ->
-        if (durationMs == C.TIME_UNSET) fallbackPerPartMs else durationMs
+        if (durationMs == C.TIME_UNSET) 1L else durationMs
     }
 }
