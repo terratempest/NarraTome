@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
 import android.os.Build
 import android.view.KeyEvent
 import androidx.annotation.OptIn
@@ -29,6 +30,8 @@ import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaLibraryService.MediaLibrarySession
 import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
 import com.narratome.BuildConfig
 import com.narratome.MainActivity
 import com.narratome.data.local.db.CatalogDao
@@ -96,7 +99,9 @@ class AudiobookPlaybackService : MediaLibraryService() {
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val timelineWindow = androidx.media3.common.Timeline.Window()
-    private val mediaButtonPreferenceControllers = mutableSetOf<MediaSession.ControllerInfo>()
+    private val mediaButtonPreferenceControllers = mutableMapOf<MediaSession.ControllerInfo, Boolean>()
+    private val previousChapterCommand = SessionCommand(ACTION_PREVIOUS_CHAPTER, Bundle.EMPTY)
+    private val nextChapterCommand = SessionCommand(ACTION_NEXT_CHAPTER, Bundle.EMPTY)
     @Volatile private var seekBackMs: Long = DEFAULT_SEEK_SKIP_MS
     @Volatile private var seekForwardMs: Long = DEFAULT_SEEK_SKIP_MS
 
@@ -253,23 +258,6 @@ class AudiobookPlaybackService : MediaLibraryService() {
                 )
             }
 
-            override fun seekToNext() = seekToNextChapterOrMediaItem()
-
-            override fun seekToNextMediaItem() = seekToNextChapterOrMediaItem()
-
-            override fun seekToPrevious() = seekToPreviousChapterOrMediaItem()
-
-            override fun seekToPreviousMediaItem() = seekToPreviousChapterOrMediaItem()
-
-            override fun getAvailableCommands(): Player.Commands =
-                super.getAvailableCommands().withChapterNavigationCommands()
-
-            override fun isCommandAvailable(command: Int): Boolean =
-                command == Player.COMMAND_SEEK_TO_NEXT ||
-                    command == Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM ||
-                    command == Player.COMMAND_SEEK_TO_PREVIOUS ||
-                    command == Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM ||
-                    super.isCommandAvailable(command)
         }
 
         player?.addListener(object : Player.Listener {
@@ -350,10 +338,28 @@ class AudiobookPlaybackService : MediaLibraryService() {
                 .build()
 
         setMediaNotificationProvider(
-            DefaultMediaNotificationProvider.Builder(this)
-                .setChannelId(PLAYBACK_CHANNEL_ID)
-                .setNotificationId(PLAYBACK_NOTIFICATION_ID)
-                .build()
+            object : DefaultMediaNotificationProvider(
+                this,
+                { PLAYBACK_NOTIFICATION_ID },
+                PLAYBACK_CHANNEL_ID,
+                DefaultMediaNotificationProvider.DEFAULT_CHANNEL_NAME_RESOURCE_ID,
+            ) {
+                override fun getMediaButtons(
+                    session: MediaSession,
+                    playerCommands: Player.Commands,
+                    mediaButtonPreferences: ImmutableList<CommandButton>,
+                    showPauseButton: Boolean,
+                ): ImmutableList<CommandButton> =
+                    super.getMediaButtons(
+                        session,
+                        playerCommands,
+                        mediaButtonPreferences.filterNot { button ->
+                            val action = button.sessionCommand?.customAction
+                            action == ACTION_PREVIOUS_CHAPTER || action == ACTION_NEXT_CHAPTER
+                        }.let { ImmutableList.copyOf(it) },
+                        showPauseButton,
+                    )
+            }
         )
         setForegroundServiceTimeoutMs(
             playbackNotificationRetentionTimeoutMs(DEFAULT_PLAYBACK_NOTIFICATION_RETENTION_MINUTES),
@@ -391,11 +397,14 @@ class AudiobookPlaybackService : MediaLibraryService() {
                     seekBackMs = backSeconds * 1000L
                     seekForwardMs = forwardSeconds * 1000L
                     val session = mediaLibrarySession ?: return@collect
-                    val buttonPreferences = playbackButtonPreferences(backSeconds, forwardSeconds)
-                    synchronized(mediaButtonPreferenceControllers) {
-                        mediaButtonPreferenceControllers.toList()
-                    }.forEach { controller ->
-                        session.setMediaButtonPreferences(controller, buttonPreferences)
+                    val controllers = synchronized(mediaButtonPreferenceControllers) {
+                        mediaButtonPreferenceControllers.toMap()
+                    }
+                    controllers.forEach { (controller, includeChapterControls) ->
+                        session.setMediaButtonPreferences(
+                            controller,
+                            playbackButtonPreferences(backSeconds, forwardSeconds, includeChapterControls),
+                        )
                     }
                 }
         }
@@ -561,11 +570,7 @@ class AudiobookPlaybackService : MediaLibraryService() {
                     }
 
                     KeyEvent.KEYCODE_MEDIA_NEXT -> {
-                        if (isAndroidAutoController(session, controllerInfo)) {
-                            sessionPlayer.seekToNextMediaItem()
-                        } else {
-                            sessionPlayer.seekForward()
-                        }
+                        sessionPlayer.seekForward()
                         true
                     }
 
@@ -575,11 +580,7 @@ class AudiobookPlaybackService : MediaLibraryService() {
                     }
 
                     KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
-                        if (isAndroidAutoController(session, controllerInfo)) {
-                            sessionPlayer.seekToPreviousMediaItem()
-                        } else {
-                            sessionPlayer.seekBack()
-                        }
+                        sessionPlayer.seekBack()
                         true
                     }
 
@@ -592,19 +593,31 @@ class AudiobookPlaybackService : MediaLibraryService() {
                 }
             }
 
+            override fun onCustomCommand(
+                session: MediaSession,
+                controller: MediaSession.ControllerInfo,
+                customCommand: SessionCommand,
+                args: Bundle,
+            ): ListenableFuture<SessionResult> {
+                if (!isAndroidAutoController(session, controller)) {
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_PERMISSION_DENIED))
+                }
+                when (customCommand.customAction) {
+                    ACTION_PREVIOUS_CHAPTER -> seekToPreviousChapterOrMediaItem()
+                    ACTION_NEXT_CHAPTER -> seekToNextChapterOrMediaItem()
+                    else -> return super.onCustomCommand(session, controller, customCommand, args)
+                }
+                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            }
+
             override fun onConnect(
                 session: MediaSession,
                 controller: MediaSession.ControllerInfo
             ): MediaSession.ConnectionResult {
 
-                val buttonPreferences = playbackButtonPreferences(
-                    seekBackMs.secondsFromMillis(),
-                    seekForwardMs.secondsFromMillis()
-                )
-
                 // PHONE NOTIFICATION
                 if (session.isMediaNotificationController(controller)) {
-                    trackMediaButtonPreferenceController(controller)
+                    trackMediaButtonPreferenceController(controller, includeChapterControls = true)
 
                     val playerCommands =
                         MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS
@@ -619,22 +632,51 @@ class AudiobookPlaybackService : MediaLibraryService() {
 
                     return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                         .setAvailablePlayerCommands(playerCommands)
-                        .setMediaButtonPreferences(buttonPreferences)
+                        .setAvailableSessionCommands(
+                            MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
+                                .buildUpon()
+                                .add(previousChapterCommand)
+                                .add(nextChapterCommand)
+                                .build(),
+                        )
+                        .setMediaButtonPreferences(
+                            playbackButtonPreferences(
+                                seekBackMs.secondsFromMillis(),
+                                seekForwardMs.secondsFromMillis(),
+                                includeChapterControls = true,
+                            ),
+                        )
                         .build()
                 } else if (isAndroidAutoController(session, controller)) {
-                    trackMediaButtonPreferenceController(controller)
+                    trackMediaButtonPreferenceController(controller, includeChapterControls = true)
 
                     val playerCommands =
                         MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS
-                            .withChapterNavigationCommands()
                             .buildUpon()
+                            .remove(Player.COMMAND_SEEK_TO_NEXT)
+                            .remove(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                            .remove(Player.COMMAND_SEEK_TO_PREVIOUS)
+                            .remove(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
                             .add(Player.COMMAND_SEEK_BACK)
                             .add(Player.COMMAND_SEEK_FORWARD)
+                            .build()
+                    val sessionCommands =
+                        MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
+                            .buildUpon()
+                            .add(previousChapterCommand)
+                            .add(nextChapterCommand)
                             .build()
 
                     return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                         .setAvailablePlayerCommands(playerCommands)
-                        .setMediaButtonPreferences(buttonPreferences)
+                        .setAvailableSessionCommands(sessionCommands)
+                        .setMediaButtonPreferences(
+                            playbackButtonPreferences(
+                                seekBackMs.secondsFromMillis(),
+                                seekForwardMs.secondsFromMillis(),
+                                includeChapterControls = true,
+                            ),
+                        )
                         .build()
                 }
 
@@ -1234,24 +1276,49 @@ class AudiobookPlaybackService : MediaLibraryService() {
 
     private fun playbackButtonPreferences(
         backSeconds: Int,
-        forwardSeconds: Int
-    ): ImmutableList<CommandButton> =
-        ImmutableList.of(
+        forwardSeconds: Int,
+        includeChapterControls: Boolean = false,
+    ): ImmutableList<CommandButton> = ImmutableList.builder<CommandButton>().apply {
+        if (includeChapterControls) {
+            add(
+                CommandButton.Builder(CommandButton.ICON_PREVIOUS)
+                    .setSessionCommand(previousChapterCommand)
+                    .setDisplayName("Previous chapter")
+                    .setSlots(CommandButton.SLOT_BACK_SECONDARY, CommandButton.SLOT_OVERFLOW)
+                    .build(),
+            )
+        }
+        add(
             CommandButton.Builder(skipBackIcon(backSeconds))
                 .setPlayerCommand(Player.COMMAND_SEEK_BACK)
                 .setDisplayName("Back ${backSeconds}s")
                 .setSlots(CommandButton.SLOT_BACK)
                 .build(),
+        )
+        add(
             CommandButton.Builder(skipForwardIcon(forwardSeconds))
                 .setPlayerCommand(Player.COMMAND_SEEK_FORWARD)
                 .setDisplayName("Forward ${forwardSeconds}s")
                 .setSlots(CommandButton.SLOT_FORWARD)
-                .build()
+                .build(),
         )
+        if (includeChapterControls) {
+            add(
+                CommandButton.Builder(CommandButton.ICON_NEXT)
+                    .setSessionCommand(nextChapterCommand)
+                    .setDisplayName("Next chapter")
+                    .setSlots(CommandButton.SLOT_FORWARD_SECONDARY, CommandButton.SLOT_OVERFLOW)
+                    .build(),
+            )
+        }
+    }.build()
 
-    private fun trackMediaButtonPreferenceController(controller: MediaSession.ControllerInfo) {
+    private fun trackMediaButtonPreferenceController(
+        controller: MediaSession.ControllerInfo,
+        includeChapterControls: Boolean,
+    ) {
         synchronized(mediaButtonPreferenceControllers) {
-            mediaButtonPreferenceControllers.add(controller)
+            mediaButtonPreferenceControllers[controller] = includeChapterControls
         }
     }
 
@@ -1295,5 +1362,7 @@ class AudiobookPlaybackService : MediaLibraryService() {
         private const val FULL_LIBRARY_ID = "full_library"
         private const val PLAYBACK_CHANNEL_ID = "playback"
         private const val DEFAULT_SEEK_SKIP_MS = 30_000L
+        private const val ACTION_PREVIOUS_CHAPTER = "com.narratome.action.PREVIOUS_CHAPTER"
+        private const val ACTION_NEXT_CHAPTER = "com.narratome.action.NEXT_CHAPTER"
     }
 }

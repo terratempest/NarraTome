@@ -1,6 +1,5 @@
 package com.narratome.player
 
-import androidx.media3.common.Player
 import com.narratome.domain.model.BookChapter
 
 internal fun nextChapterSeekPositionMs(chapters: List<BookChapter>, currentPositionMs: Long): Long? {
@@ -25,11 +24,3 @@ internal fun previousChapterSeekPositionMs(chapters: List<BookChapter>, currentP
     }
     return (targetStartSec * 1000.0).toLong()
 }
-
-internal fun Player.Commands.withChapterNavigationCommands(): Player.Commands =
-    buildUpon()
-        .add(Player.COMMAND_SEEK_TO_NEXT)
-        .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
-        .add(Player.COMMAND_SEEK_TO_PREVIOUS)
-        .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
-        .build()
