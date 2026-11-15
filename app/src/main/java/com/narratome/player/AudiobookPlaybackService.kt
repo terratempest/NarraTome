@@ -606,7 +606,7 @@ class AudiobookPlaybackService : MediaLibraryService() {
                 args: Bundle,
             ): ListenableFuture<SessionResult> {
                 if (!isAndroidAutoController(session, controller)) {
-                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_PERMISSION_DENIED))
+                    return Futures.immediateFuture(SessionResult(androidx.media3.session.SessionError.ERROR_PERMISSION_DENIED))
                 }
                 when (customCommand.customAction) {
                     ACTION_PREVIOUS_CHAPTER -> seekToPreviousChapterOrMediaItem()
