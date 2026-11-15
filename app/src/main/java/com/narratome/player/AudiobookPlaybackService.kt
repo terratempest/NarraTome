@@ -61,6 +61,7 @@ import com.narratome.data.remote.HttpsRequiredException
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.Callable
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
@@ -548,6 +549,11 @@ class AudiobookPlaybackService : MediaLibraryService() {
                 }
 
                 val sessionPlayer = session.player
+                if (sessionPlayer.currentMediaItem == null && keyEvent.keyCode in RESUMABLE_PLAY_KEY_CODES) {
+                    // Nothing is loaded yet (e.g. Android Auto only displayed the resumption item).
+                    // Let Media3's default handling run onPlaybackResumption, then prepare and play.
+                    return super.onMediaButtonEvent(session, controllerInfo, intent)
+                }
                 return when (keyEvent.keyCode) {
                     KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
                     KeyEvent.KEYCODE_HEADSETHOOK -> {
@@ -702,16 +708,15 @@ class AudiobookPlaybackService : MediaLibraryService() {
                 playbackExecutor.submit(
                     Callable {
                         runBlocking {
+                            // On a cold start (e.g. Android Auto launching the service) the metered
+                            // preference and server reachability may not be known yet.
+                            networkPolicy.awaitReady()
 
                             val lastPlayed = progressRepository.getLastPlayed()
-                                ?: return@runBlocking MediaSession.MediaItemsWithStartPosition(
-                                    ImmutableList.of(), 0, 0L
-                                )
+                                ?: throw UnsupportedOperationException("No audiobook to resume")
 
                             val entity = catalogDao.getById(lastPlayed.libraryItemId)
-                                ?: return@runBlocking MediaSession.MediaItemsWithStartPosition(
-                                    ImmutableList.of(), 0, 0L
-                                )
+                                ?: throw UnsupportedOperationException("No audiobook to resume")
 
                             val position = (lastPlayed.currentTimeSec * 1000).toLong()
 
@@ -722,8 +727,21 @@ class AudiobookPlaybackService : MediaLibraryService() {
                                 )
                                 .build()
 
-                            val allowRemoteFallback = serverReachabilityRepository.serverReachable.value
-                            val resolved = resolveMediaItems(listOf(baseItem), allowRemoteFallback)
+                            var allowRemoteFallback = serverReachabilityRepository.serverReachable.value
+                            var resolved = resolveMediaItems(listOf(baseItem), allowRemoteFallback)
+                            if (resolved.isEmpty() && !allowRemoteFallback) {
+                                // Not downloaded and the reachability probe hasn't finished yet.
+                                withTimeoutOrNull(RESUMPTION_REACHABILITY_TIMEOUT_MS) {
+                                    serverReachabilityRepository.refresh()
+                                }
+                                allowRemoteFallback = serverReachabilityRepository.serverReachable.value
+                                if (allowRemoteFallback) {
+                                    resolved = resolveMediaItems(listOf(baseItem), true)
+                                }
+                            }
+                            if (resolved.isEmpty()) {
+                                throw UnsupportedOperationException("Audiobook is not available for playback")
+                            }
                             MediaSession.MediaItemsWithStartPosition(
                                 ImmutableList.copyOf(resolved.map { it.mediaItem }),
                                 0,
@@ -1362,5 +1380,11 @@ class AudiobookPlaybackService : MediaLibraryService() {
         private const val DEFAULT_SEEK_SKIP_MS = 30_000L
         private const val ACTION_PREVIOUS_CHAPTER = "com.narratome.action.PREVIOUS_CHAPTER"
         private const val ACTION_NEXT_CHAPTER = "com.narratome.action.NEXT_CHAPTER"
+        private const val RESUMPTION_REACHABILITY_TIMEOUT_MS = 6_000L
+        private val RESUMABLE_PLAY_KEY_CODES = setOf(
+            KeyEvent.KEYCODE_MEDIA_PLAY,
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+            KeyEvent.KEYCODE_HEADSETHOOK,
+        )
     }
 }
